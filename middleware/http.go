@@ -142,8 +142,9 @@ func (m *HTTPMiddleware) Handler(next http.Handler) http.Handler {
 		}
 
 		trail.SetResponse(&gotrails.HTTPResponse{
-			Status: rw.status,
-			Body:   respBody,
+			Status:  rw.status,
+			Headers: m.headerFilter.Filter(rw.Header()),
+			Body:    respBody,
 		})
 
 		// Finalize and flush trail

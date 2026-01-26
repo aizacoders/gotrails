@@ -275,6 +275,61 @@ multiSink := sink.NewMultiSink(
 )
 ```
 
+## Advanced Features
+
+### Sampling
+Control the percentage of requests that get a trail log:
+```go
+cfg := gotrails.NewConfig(
+    gotrails.WithSamplingRate(0.1), // 10% of requests will be logged
+)
+```
+
+### Immutable Trail
+Prevent any further changes to a trail after it is finalized (audit-grade):
+```go
+cfg := gotrails.NewConfig(
+    gotrails.WithImmutable(true),
+)
+// After trail.Finalize(), all mutating methods become no-ops.
+```
+
+### Hash Chaining
+Each trail log includes a cryptographic hash of its contents and the previous log's hash:
+```go
+trail.SetPrevHash(prevHash) // Set previous hash before Finalize
+trail.Finalize()
+fmt.Println(trail.Hash) // SHA-256 hash for audit compliance
+```
+
+### OpenTelemetry Bridge
+Correlate gotrails logs with OpenTelemetry traces:
+```go
+import oteltrace "go.opentelemetry.io/otel/trace"
+// ...
+trail := gotrails.GetTrail(ctx)
+gotrails.InjectOtelSpanToTrail(ctx, trail)
+// Trail metadata will include otel_trace_id, otel_span_id, otel_span_sampled
+```
+
+### Internal Steps API
+Capture internal processing steps with latency:
+```go
+// Manual
+step := gotrails.StartStep("ValidateRequest", req, nil)
+// ... do work ...
+gotrails.EndStep(&step, resp, err)
+trail.AddInternalStep(step)
+
+// Automatic
+_, _ = gotrails.TraceStep(ctx, "CreatePayment", req, func(ctx context.Context) (any, error) {
+    // ... do work ...
+    return resp, err
+})
+```
+
+---
+
 ## License
 
 MIT License

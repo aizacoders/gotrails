@@ -1,8 +1,15 @@
 package gotrails
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"math/rand"
 	"sync"
 	"time"
+
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 // IntegrationType represents the type of integration
@@ -43,6 +50,13 @@ type Trail struct {
 
 	// Free-form metadata
 	Metadata map[string]any `json:"metadata,omitempty"`
+
+	immutable bool    // set true after Finalize if config.Immutable
+	cfg       *Config // keep config reference for immutability check
+
+	// Hash chaining
+	Hash     string `json:"hash,omitempty"`
+	prevHash string // not exported, for chaining
 }
 
 // HTTPRequest represents the incoming HTTP request
@@ -56,8 +70,9 @@ type HTTPRequest struct {
 
 // HTTPResponse represents the outgoing HTTP response
 type HTTPResponse struct {
-	Status int `json:"status"`
-	Body   any `json:"body,omitempty"`
+	Status  int                 `json:"status"`
+	Headers map[string][]string `json:"headers,omitempty"`
+	Body    any                 `json:"body,omitempty"`
 }
 
 // InternalStep represents an internal processing step
@@ -94,6 +109,13 @@ func NewTrail(traceID, requestID string, cfg *Config) *Trail {
 		cfg = DefaultConfig()
 	}
 
+	// Sampling logic: skip trail if random > sampling rate
+	if cfg.SamplingRate < 1.0 {
+		if rand.Float64() > cfg.SamplingRate {
+			return nil
+		}
+	}
+
 	now := time.Now().UTC()
 	return &Trail{
 		Timestamp:     now,
@@ -106,6 +128,7 @@ func NewTrail(traceID, requestID string, cfg *Config) *Trail {
 		Integrations:  make([]Integration, 0),
 		Errors:        make([]TrailError, 0),
 		Metadata:      make(map[string]any),
+		cfg:           cfg,
 	}
 }
 
@@ -127,6 +150,9 @@ func (t *Trail) SetResponse(resp *HTTPResponse) {
 func (t *Trail) AddInternalStep(step InternalStep) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.immutable {
+		return
+	}
 	t.InternalSteps = append(t.InternalSteps, step)
 }
 
@@ -134,6 +160,9 @@ func (t *Trail) AddInternalStep(step InternalStep) {
 func (t *Trail) AddIntegration(integration Integration) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.immutable {
+		return
+	}
 	t.Integrations = append(t.Integrations, integration)
 }
 
@@ -141,6 +170,9 @@ func (t *Trail) AddIntegration(integration Integration) {
 func (t *Trail) AddError(source, message string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.immutable {
+		return
+	}
 	t.Errors = append(t.Errors, TrailError{
 		Source:  source,
 		Message: message,
@@ -151,6 +183,9 @@ func (t *Trail) AddError(source, message string) {
 func (t *Trail) AddErrorWithCode(source, message, code string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.immutable {
+		return
+	}
 	t.Errors = append(t.Errors, TrailError{
 		Source:  source,
 		Message: message,
@@ -162,17 +197,75 @@ func (t *Trail) AddErrorWithCode(source, message, code string) {
 func (t *Trail) SetMetadata(key string, value any) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.immutable {
+		return
+	}
 	if t.Metadata == nil {
 		t.Metadata = make(map[string]any)
 	}
 	t.Metadata[key] = value
 }
 
-// Finalize calculates the total latency and prepares the trail for flushing
-func (t *Trail) Finalize() {
+// SetPrevHash sets the previous hash for hash chaining
+func (t *Trail) SetPrevHash(prev string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.prevHash = prev
+}
+
+// ComputeHash calculates the hash of the trail (excluding Hash field itself)
+func (t *Trail) ComputeHash() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.computeHashLocked()
+}
+
+// Finalize calculates the total latency, prepares the trail for flushing, and sets the hash
+func (t *Trail) Finalize() {
+	t.mu.Lock()
 	t.LatencyMs = time.Since(t.startTime).Milliseconds()
+	if t.cfg != nil && t.cfg.Immutable {
+		t.immutable = true
+	}
+	t.Hash = t.computeHashLocked()
+	t.mu.Unlock()
+}
+
+// computeHashLocked calculates the hash of the trail assuming the lock is already held.
+func (t *Trail) computeHashLocked() string {
+	// Prepare a minimal struct for hashing (exclude Hash, prevHash, mu, cfg, immutable)
+	tmp := struct {
+		Timestamp     time.Time
+		TraceID       string
+		RequestID     string
+		Service       string
+		Environment   string
+		Request       *HTTPRequest
+		Response      *HTTPResponse
+		LatencyMs     int64
+		InternalSteps []InternalStep
+		Integrations  []Integration
+		Errors        []TrailError
+		Metadata      map[string]any
+		PrevHash      string
+	}{
+		Timestamp:     t.Timestamp,
+		TraceID:       t.TraceID,
+		RequestID:     t.RequestID,
+		Service:       t.Service,
+		Environment:   t.Environment,
+		Request:       t.Request,
+		Response:      t.Response,
+		LatencyMs:     t.LatencyMs,
+		InternalSteps: t.InternalSteps,
+		Integrations:  t.Integrations,
+		Errors:        t.Errors,
+		Metadata:      t.Metadata,
+		PrevHash:      t.prevHash,
+	}
+	b, _ := json.Marshal(tmp)
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
 }
 
 // Clone creates a deep copy of the trail for safe reading
@@ -205,4 +298,48 @@ func (t *Trail) Clone() *Trail {
 	}
 
 	return clone
+}
+
+// StartStep creates a new InternalStep with the given name and start time
+func StartStep(name string, req, resp any) InternalStep {
+	return InternalStep{
+		Name:      name,
+		Request:   req,
+		Response:  resp,
+		StartTime: time.Now(),
+	}
+}
+
+// EndStep finalizes an InternalStep, setting latency and optional error/response
+func EndStep(step *InternalStep, resp any, err error) {
+	step.LatencyMs = time.Since(step.StartTime).Milliseconds()
+	if resp != nil {
+		step.Response = resp
+	}
+	if err != nil {
+		step.Error = err.Error()
+	}
+}
+
+// TraceStep runs a function, captures latency, and adds the step to the trail in context
+func TraceStep(ctx context.Context, name string, req any, fn func(context.Context) (resp any, err error)) (any, error) {
+	step := StartStep(name, req, nil)
+	resp, err := fn(ctx)
+	EndStep(&step, resp, err)
+	AddInternalStepToContext(ctx, step)
+	return resp, err
+}
+
+// InjectOtelSpanToTrail links the current OpenTelemetry span to the trail (if present in context)
+func InjectOtelSpanToTrail(ctx context.Context, trail *Trail) {
+	if trail == nil {
+		return
+	}
+	span := oteltrace.SpanFromContext(ctx)
+	if span == nil || !span.SpanContext().IsValid() {
+		return
+	}
+	trail.SetMetadata("otel_trace_id", span.SpanContext().TraceID().String())
+	trail.SetMetadata("otel_span_id", span.SpanContext().SpanID().String())
+	trail.SetMetadata("otel_span_sampled", span.SpanContext().IsSampled())
 }

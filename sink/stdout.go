@@ -3,6 +3,7 @@ package sink
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -16,6 +17,7 @@ type StdoutSink struct {
 	writer   io.Writer
 	pretty   bool
 	disabled bool
+	identify bool
 }
 
 // StdoutOption is an option for StdoutSink
@@ -42,11 +44,19 @@ func WithDisabled(disabled bool) StdoutOption {
 	}
 }
 
+// WithIdentifier enables a single-line identifier prefix for each trail
+func WithIdentifier(enabled bool) StdoutOption {
+	return func(s *StdoutSink) {
+		s.identify = enabled
+	}
+}
+
 // NewStdoutSink creates a new StdoutSink
 func NewStdoutSink(opts ...StdoutOption) *StdoutSink {
 	s := &StdoutSink{
-		writer: os.Stdout,
-		pretty: false,
+		writer:   os.Stdout,
+		pretty:   false,
+		identify: true,
 	}
 
 	for _, opt := range opts {
@@ -78,9 +88,25 @@ func (s *StdoutSink) Write(ctx context.Context, trail *gotrails.Trail) error {
 		return err
 	}
 
+	if s.identify {
+		method := ""
+		path := ""
+		if trail != nil && trail.Request != nil {
+			method = trail.Request.Method
+			path = trail.Request.Path
+		}
+		_, err = fmt.Fprintf(s.writer, "[GOTRAILS-debug] [trace_id=%s,request_id=%s,method=%s,path=%s,loggers=%s]\n", trail.TraceID, trail.RequestID, method, path, data)
+		if err != nil {
+			return err
+		}
+	}
+
+	if s.identify {
+		return err
+	}
+
 	// Add newline
 	data = append(data, '\n')
-
 	_, err = s.writer.Write(data)
 	return err
 }

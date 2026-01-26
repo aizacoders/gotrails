@@ -26,6 +26,12 @@ type Config struct {
 	// Sink configuration
 	EnableAsync    bool
 	AsyncQueueSize int
+
+	// Sampling configuration
+	SamplingRate float64 // 0.0 = none, 1.0 = all, 0.5 = 50%
+
+	// Immutability flag
+	Immutable bool // If true, trail cannot be modified after Finalize
 }
 
 // DefaultConfig returns the default configuration
@@ -60,6 +66,8 @@ func DefaultConfig() *Config {
 		IncludeHeaders: nil, // nil means include all (except excluded)
 		EnableAsync:    true,
 		AsyncQueueSize: 1000,
+		SamplingRate:   1.0, // default to 100% sampling
+		Immutable:      false,
 	}
 }
 
@@ -154,6 +162,13 @@ func WithAsyncEnabled(enabled bool) ConfigOption {
 func WithAsyncQueueSize(size int) ConfigOption {
 	return func(c *Config) {
 		c.AsyncQueueSize = size
+	}
+}
+
+// WithSamplingRate sets the trace sampling rate
+func WithSamplingRate(rate float64) ConfigOption {
+	return func(c *Config) {
+		c.SamplingRate = rate
 	}
 }
 

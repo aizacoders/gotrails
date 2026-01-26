@@ -87,10 +87,10 @@ func (m *GinMiddleware) Handler() gin.HandlerFunc {
 		traceID := gotrails.ExtractTraceID(c.Request, m.cfg)
 		requestID := gotrails.ExtractRequestID(c.Request, m.cfg)
 
-		// Create new trail
+		// Create a new trail
 		trail := gotrails.NewTrail(traceID, requestID, m.cfg)
 
-		// Read and restore request body
+		// Read and restore the request body
 		var reqBody any
 		if c.Request.Body != nil && c.Request.ContentLength > 0 {
 			bodyBytes, newBody, err := m.bodyReader.ReadAndRestore(c.Request.Body)
@@ -123,33 +123,31 @@ func (m *GinMiddleware) Handler() gin.HandlerFunc {
 		c.Header(m.cfg.TraceIDHeader, traceID)
 		c.Header(m.cfg.RequestIDHeader, requestID)
 
-		// Create response writer wrapper to capture response
-		rw := &ginResponseWriter{
-			ResponseWriter: c.Writer,
-			body:           &bytes.Buffer{},
-			maxSize:        m.cfg.MaxResponseBodySize,
-		}
-		c.Writer = rw
+		// JANGAN override c.Writer dengan custom response writer
+		// rw := &ginResponseWriter{
+		// 	ResponseWriter: c.Writer,
+		// 	body:           &bytes.Buffer{},
+		// 	maxSize:        m.cfg.MaxResponseBodySize,
+		// }
+		// c.Writer = rw
 
 		// Process request
 		c.Next()
 
-		// Capture response
-		var respBody any
-		if rw.body.Len() > 0 {
-			if m.cfg.EnableMasking {
-				respBody, _ = m.masker.ParseAndMaskJSON(rw.body.Bytes())
-			} else {
-				respBody, _ = parseJSON(rw.body.Bytes())
-			}
-		}
-
+		// Capture response (tidak perlu custom response writer)
+		// var respBody any
+		// if rw.body.Len() > 0 {
+		// 	if m.cfg.EnableMasking {
+		// 		respBody, _ = m.masker.ParseAndMaskJSON(rw.body.Bytes())
+		// 	} else {
+		// 		respBody, _ = parseJSON(rw.body.Bytes())
+		// 	}
+		// }
 		trail.SetResponse(&gotrails.HTTPResponse{
-			Status: rw.status,
-			Body:   respBody,
+			Status:  c.Writer.Status(),
+			Headers: m.headerFilter.Filter(c.Writer.Header()),
 		})
 
-		// Finalize and flush trail
 		trail.Finalize()
 		_ = m.sink.Write(context.Background(), trail)
 	}
@@ -164,6 +162,11 @@ type ginResponseWriter struct {
 }
 
 func (w *ginResponseWriter) Write(data []byte) (int, error) {
+	// Pastikan status selalu di-set sebelum menulis body
+	if w.status == 0 {
+		w.status = 200
+		w.ResponseWriter.WriteHeader(200)
+	}
 	// Capture body up to maxSize
 	if w.body.Len() < w.maxSize {
 		remaining := w.maxSize - w.body.Len()
@@ -181,7 +184,11 @@ func (w *ginResponseWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
+// WriteString Ensure status is set to 200 if WriteHeader never called
 func (w *ginResponseWriter) WriteString(s string) (int, error) {
+	if w.status == 0 {
+		w.status = 200
+	}
 	return w.Write([]byte(s))
 }
 
@@ -291,8 +298,9 @@ func StandardHTTPMiddleware(cfg *gotrails.Config, s sink.Sink) func(http.Handler
 				Body:   respBody,
 			})
 
-			// Finalize and flush trail
 			trail.Finalize()
+
+			// Finalize and flush trail
 			_ = s.Write(context.Background(), trail)
 		})
 	}
