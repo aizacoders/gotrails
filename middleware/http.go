@@ -19,6 +19,7 @@ type HTTPMiddleware struct {
 	masker       *masker.Masker
 	headerFilter *header.Filter
 	bodyReader   *body.Reader
+	afterFlush   func(context.Context, *gotrails.Trail)
 }
 
 // HTTPOption is an option for HTTPMiddleware
@@ -42,6 +43,13 @@ func WithHTTPSink(s sink.Sink) HTTPOption {
 func WithHTTPMasker(msk *masker.Masker) HTTPOption {
 	return func(m *HTTPMiddleware) {
 		m.masker = msk
+	}
+}
+
+// WithHTTPAfterFlush runs after the trail is finalized and written to sink.
+func WithHTTPAfterFlush(fn func(context.Context, *gotrails.Trail)) HTTPOption {
+	return func(m *HTTPMiddleware) {
+		m.afterFlush = fn
 	}
 }
 
@@ -150,6 +158,9 @@ func (m *HTTPMiddleware) Handler(next http.Handler) http.Handler {
 		// Finalize and flush trail
 		trail.Finalize()
 		_ = m.sink.Write(context.Background(), trail)
+		if m.afterFlush != nil {
+			m.afterFlush(r.Context(), trail)
+		}
 	})
 }
 
