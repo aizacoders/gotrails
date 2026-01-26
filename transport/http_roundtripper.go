@@ -64,8 +64,8 @@ func (rt *HTTPRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 			Name:      req.Method + " " + req.URL.Host + req.URL.Path,
 			LatencyMs: latencyMs,
 			Request: map[string]any{
-				"method":  req.Method,
-				"url":     req.URL.String(),
+				"method": req.Method,
+				"url":    req.URL.String(),
 				"headers": func() map[string][]string {
 					return hf.Filter(req.Header)
 				}(),
