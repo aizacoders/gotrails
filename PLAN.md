@@ -338,27 +338,26 @@ Used for:
 
 ### Phase 3 — Internal Steps API 🚧
 
-- [ ] `StartStep` / `EndStep`
-- [ ] `TraceStep(ctx, name, fn)`
-- [ ] Auto latency capture
+- [x] `StartStep` / `EndStep`
+- [x] `TraceStep(ctx, name, fn)`
+- [x] Auto latency capture
 
 ---
 
 ### Phase 4 — Advanced & Compliance
 
-- [ ] Sampling
-- [ ] Immutable trail
-- [ ] Hash chaining
-- [ ] OpenTelemetry bridge
+- [x] Sampling
+- [x] Immutable trail
+- [x] Hash chaining
+- [x] OpenTelemetry bridge
 
 ---
 
 ### Phase 5 — OSS Polish
 
-- [ ] README with examples
-- [ ] Real payment gateway example
-- [ ] CI + lint
-- [ ] v1.0.0 release
+- [x] README with examples
+- [x] CI
+- [x] v1.0.0 release
 
 ---
 
